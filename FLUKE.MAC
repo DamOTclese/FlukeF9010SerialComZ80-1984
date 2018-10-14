@@ -1,0 +1,631 @@
+
+;                     Fredric L. Rice, January 1984
+;
+;Revision: 15/Sep/84 with the removal of the printing of the pod name
+;          This was determined to cause a slowing down of the transmission
+;          that was not warrented by the user. Also, if a program gets
+;          compiled with the exclusion of the pod name, the fluke
+;          transfer program could crash.
+;
+;This program allows the transfer of Fluke 9010a microtester code from
+;the 9010a to the computer, or from the computer to the Fluke 9010a.
+;
+;The Fluke 9010 is a microcomputer tester and fault isolator. Though I have
+;found that there are quite a few people who use Flukes tester, I have
+;not offered this program under public domain. This is mine.
+;
+;The program allows the storrage of Fluke programs on a computers hard disk
+;or floppy, meaning that the test person does not need to use the
+;Flukes built-in tape cassett that has been shown to be too slow.
+;
+;If you need more information, it is always a good idea to read your
+;operations guide, however, there is a documentation file along with this
+;file in the FLUKE.LBR in-house library.
+;
+;Command lines that are acceptable:
+;
+;FLUKE FILENAME.FLK,1		switch 1 automaticly transmits filename.flk
+;FLUKE FILENAME.FLK,2		switch 2 automaticly receives filename.flk
+;FLUKE FILENAME.FLK		no switch gives menu and asks for direction
+;FLUKE FILENAME			extention is changed to FLK on entry into prog.
+;
+;Added an option on 21/Dec/84 to have the Kaypro 10 check the receive
+;port during the option menu. If a line feed has been sent from the
+;Fluke to the Kaypro, the Fluke has requested a receive.
+
+
+WARM    EQU     0000H           ;Warm boot entry point
+BDOS    EQU     0005H           ;BDOS entry point
+INPUT   EQU     0001H           ;BDOS console input
+OUTPUT  EQU     0002H           ;BDOS console output
+UNADIO  EQU     0006H           ;BDOS direct unadorned console Input/OUTput
+PRINT   EQU     0009H           ;BDOS print string
+OPEN    EQU     000FH           ;BDOS open file
+CLOSE   EQU     0010H           ;BDOS close file
+READS   EQU     0014H           ;BDOS read sequential
+WRITES  EQU     0015H           ;BDOS write sequential
+CREATE  EQU     0016H           ;BDOS make file
+DIOBUFF EQU     0080H           ;Disk I/O buffer area
+BAUD    EQU     0000H           ;Modem baud rate port for keypro
+DATA    EQU     0004H           ;MODEM data port for Kaypro
+STATUS  EQU     0006H           ;MODEM status port for Kaypro
+CR	EQU	000DH		;Carriage return
+LF	EQU	000AH		;Line feed
+ESC	EQU	00027		;Escape character
+XON	EQU	0011H		;Ascii resumption of operation
+XOFF	EQU	0013H		;Ascii suspension of operation
+CLS	EQU	001AH		;Kaypro clear screen character
+FCB	EQU	005CH		;Default primary file control block
+SPACE	EQU	0020H		;Ascii space
+
+	.Z80
+	JP	START
+
+PHL:	PUSH	HL		;store hl
+	LD	A,H		;load a with msb
+	CALL	GIVEIT		;display the result
+	POP	HL		;restore the working hl
+	LD	A,L		;load a with the lsb
+	CALL	GIVEIT		;display the result
+	RET			;Return to caller
+
+GIVEIT:	CALL	CNVRT		;call the conversion routine
+	LD	DE,RESULT	;load de with the result of the conversion
+	CALL	DUMP		;and display the last hex number
+	RET			;return to sender
+
+CNVRT:	PUSH	HL		;Store away the working hl register
+	PUSH	BC		;and the bc register
+	LD	HL,RESULT	;Point to the buffer that will contain result
+	INC	HL		;And add 1 to it to point to LSB
+	PUSH	AF		;Store the accumulator into stack
+	AND	0FH		;And a with 00001111
+	CALL	CNVGET		;Call the conversion routine 
+	DEC	HL		;Decriment the result address
+	POP	AF		;Restore the byte being converted
+	AND	0F0H		;And a with 11110000
+	RRCA			;Rotate a to the right ONCE
+	RRCA			;Rotate a to the right TWICE
+	RRCA			;Rotate a to the right AGAIN
+	RRCA			;Rotate a to the right the last time
+	CALL	CNVGET		;Call the conversion routine 
+	POP	BC		;Restore the systems bc register
+	POP	HL		;And the hl register
+	RET			;Return to sender
+
+CNVGET: PUSH	HL		;Store away the conversion hl pair
+	PUSH	DE		;And de along with it
+	LD	HL,INDEX	;Place index at address into hl
+	LD	D,0		;Load d with 0 so that i can add index
+	LD	E,A		;Load e register with the a register
+	ADC	HL,DE		;Add with cary to get the displacement byte
+	LD	A,(HL)		;Place the displaced byte into register
+	POP	DE		;Restore working de register
+	POP	HL		;And the hl register pair
+	LD	(HL),A		;Place second byte into the result buffer
+	RET			;Return to sender
+
+
+INITIALIZE      EQU     $       ;initialize the modem
+        LD      A,00EH          ;select baud rate of 9600
+        OUT     (BAUD),A        ;and output it to the baud rate port
+        LD      A,000H          ;select reg.
+        OUT     (STATUS),A      ;output it
+        LD      A,018H          ;throw out of mode.
+        OUT     (STATUS),A      ;output it
+        LD      A,004H          ;select reg.
+        OUT     (STATUS),A      ;output it
+        LD      A,044H          ;set ascii parameters.
+        OUT     (STATUS),A      ;output it
+        LD      A,003H          ;select reg.
+        OUT     (STATUS),A      ;output it
+        LD      A,0C1H          ;enable receive.
+        OUT     (STATUS),A      ;output it
+        LD      A,005H          ;select reg.
+        OUT     (STATUS),A      ;output it
+        LD      A,0E8H          ;enable send, dtr, rts.
+        OUT     (STATUS),A      ;output it
+	RET			;return to sender
+
+FILL	EQU	$		;Fill memory with end of file markers
+	LD	HL,EPROG	;Point to the end of the program
+	LD	DE,EPROG+1	;Point to the end plus 1
+	LD	BC,22000	;Load the byte count with 22K to fill
+	LD	A,01AH		;Load accumulator with the fill byte
+	LD	(HL),A		;Load memory with accumulator
+	LDIR			;GO TO IT! HL=HL+1;DE=DE+1;BC=BC-1;SP=SP-2
+	RET			;Return to sender
+
+FILL2	EQU	$		;Fill the data input/output buffer with eof's
+	PUSH	AF		;Store af
+	PUSH	BC		;Store bc
+	PUSH	DE		;Store de
+	PUSH	HL		;Store hl
+	PUSH	IX		;Store ix
+	LD	HL,DIOBUFF	;Point to the start of the buffer to fill
+	LD	DE,DIOBUFF+1	;Point to the next byte
+	LD	BC,128		;Load byte count with the number to fille
+	LD	A,01AH		;Load accumulator with end of file marker
+	LD	(HL),A		;Load the byte into memory
+	LDIR			;And continue to move untill byte count = 0
+	POP	IX		;Restore ix
+	POP	HL		;Restore hl
+	POP	DE		;Restore de
+	POP	BC		;Restore bc
+	POP	AF		;Restore af
+	RET			;Return to sender
+
+RECEIVE	EQU	$		;Receive character, place it into (DE)
+	IN	A,(STATUS)	;Get the status of the buffer
+	BIT	0,A		;Test the first bit for a 1.
+	JR	Z,RECEIVE	;If no byte, then continue to receive
+	IN	A,(DATA)	;Load accumulator with transmitted byte
+	LD	(DE),A		;Load memory with the byte in the buffer
+	CP	CR		;Was the received byte a carriage return?
+	JR	Z,LOOKAT	;If it is, jump to the look at routine
+	INC	DE		;Incriment the destination address
+	JR	RECEIVE		;Continue to receive data
+
+LOOKAT:	PUSH	DE		;Store the destination pointer
+	DEC	DE		;And subtract three from it
+	DEC	DE		;to see if a :00 was received.
+	DEC	DE		;If yes, then end of file found.
+	LD	A,(DE)		;Load accumulator with the byte
+	CP	03AH		;Check to see if it is a :
+	JR	Z,FOUNDIT	;If it is, then go to found it
+	POP	DE		;Restore the destination
+	INC	DE		;And incriment it.
+	JR	RECEIVE		;Continue to receive data
+
+FOUNDIT	EQU	$		;End of data dump
+	POP	DE		;Do some house cleaning by popping unpoped
+	RET			;Return to the routine that called receive
+
+TRANSMIT	EQU	$	;Transmit character in the buffer at (BYTE)
+	IN	A,(STATUS)	;put the status of the buffer into accumulator
+	BIT	2,A		;Test the third bit
+	JR	Z,TRANSMIT	;If the result was not set, continue to loop
+	LD	A,(DE)		;Load accumulator with the byte to transmit
+	OUT	(DATA),A	;And dump the byte to the data buffer
+	CP	CR		;Check to see if it was a carriage return
+	JR	Z,CHECKIT	;If it is, then jump to the check it routine
+	INC	DE		;Incriment the address
+	JR	TRANSMIT	;Continue to transmit the data
+
+CHECKIT	EQU	$		;Check to see if :00 was transmitted for end
+	PUSH	DE		;Store the destination address
+	DEC	DE		;And subtract three from it
+	DEC	DE		;To point to the : if it is
+	DEC	DE		;There becaude of end of file.
+	LD	A,(DE)		;load accumulator with the byte
+	CP	03AH		;Check to see if it was a :
+	JR	Z,ITISEND	;If true, then go to it is end
+	POP	DE		;Restore the destination address
+	INC	DE		;incriment the address
+	JR	TRANSMIT	;And resume operation of transmit
+
+ITISEND	EQU	$		;It is the end of the file being transmitted
+	POP	DE		;Do some house cleaning to remove unpoped reg.
+	RET			;And return to the caller of the transmit
+
+LCOUNT:	DB	0, 0		;This is the line counter buffer
+CRLF:	DB	CR, LF, '$'
+ASCII:	DB	0		;Place for hex to ascii conversion
+FIRST:	DB	0		;Place to store first byte of ascii
+PROGS:	DB	0		;Place for the program count in workspace
+INDEX:	DB	'0123456789ABCDEF'
+INDEX2:	DB	'0123456789ABCDEF:*$', 01AH, 0DH, 0AH
+RESULT: DB	'  $'		;Place to store the result of the conversion
+MSG01:	DB	CLS, CR, LF, LF
+	DB	'                         9600 BAUD', CR, LF, LF
+	DB	'1... Transfer from Kaypro to Fluke', CR, LF, LF
+	DB	'2... Transfer from Fluke to Kaypro', CR, LF, LF
+	DB	'3... Abort without a data transfer'
+	DB	ESC, '=', 53, 32  ;Placed cursor at line 21, collumn 01
+	DB	'Select option number: $'
+
+MSG02:	DB	CR, LF, 'Data dump done.$'
+MSG03:	DB	CLS, 'Waiting for data:', CR, LF, '$'
+MSG04:	DB	CLS, '$'
+MSG06:	DB	'Total number of programs in workspace: $'
+MSG07:	DB	'Total number of bytes for transmission: $'
+MSG08:	DB	' ***$'
+ERROR1:	DB	CR, LF, '*** ERROR 1, UNABLE TO LOCATE FILE ***$'
+ERROR2:	DB	CR, LF, '*** ERROR 2, UNABLE TO CREATE FILE ***$'
+ERROR3:	DB	CR, LF, '*** ERROR 3, FILE ALREADY ON DISK ***$'
+ERROR4:	DB	CR, LF, '*** ERROR 4, YOU MUST OFFER A FILE NAME ***$'
+ERROR5:	DB	CR, LF, '*** ERROR 5, UNABLE TO WRITE A SECTOR ***$'
+ERROR6:	DB	CR, LF, '*** ERROR 6, FILE FORMAT IS BAD, BYTE FOUND ON LINE $'
+
+MSG09:	DB	CLS, CR, LF, LF, LF, LF, LF, LF
+	DB	'Please hit AUX-I/F, READ, and ENTER on the Fluke keyboard.'
+	DB	CR, LF
+	DB	'After you do this, I will dump the file over to the Fluke.'
+	DB	CR, LF, LF, LF, LF, 'Waiting: $'
+
+SWITCH:	DB	00H		;PLACE FOR SWITCH IF ANY
+EFILE:	DB	0,0		;Place to store address of end of file data
+
+	DS	32		;Allocate a 16 level stack
+STACK	EQU	$		;Starting here, working backards in memory
+
+START	EQU	$		;Starting execution at this address
+	LD	SP,STACK	;Posistion the stack into cented of program
+
+;SEE IF THERE IS A ,1 ,3 OR A ,2 IN THE COMMAND LINE
+
+	LD	IX,0080H	;POINT TO THE COMMAND BUFFER
+	LD	B,50		;LOAD BYTE COUNT WITH 50 BYTES TO CHECK
+CHKLOP:	LD	A,(IX+0)	;LOAD A WITH THE BYTE
+	CP	','		;CHECK TO SEE IF IT IS A COMMA
+	JR	NZ,INCRIM	;IF NOT, THEN GO TO INCRIM
+	LD	A,(IX+1)	;LOAD A WITH THE SECOND BYTE
+	CP	'1'		;CHECK TO SEE IF IT IS ONE
+	JR	Z,SWONE		;IF IT IS, THEN GO TO SWITCH ONE
+	CP	'2'		;CHECK TO SEE IF IT IS TWO
+	JR	Z,SWTWO		;If it is, go to switch two
+	CP	'3'		;Check to see if it a three
+	JR	Z,SWTHREE	;If it is, go to switch three
+	JR	INCRIM		;IF NOT, THEN GO TO INCRIM
+
+SWTWO:	LD	HL,SWITCH	;LOAD HL WITH THE SWITCH BUFFER
+	LD	A,2		;LOAD ACCUMULATOR WITH 2
+	LD	(HL),A		;AND LOAD IT WITH 2
+	JR	OKFINE		;GO TO OK FINE ENTRY POINT
+
+SWONE:	LD	A,1		;LOAD ACCUMULATOR WITH 1
+	LD	HL,SWITCH	;POINT TO THE SWITCH BUFFER
+	LD	(HL),A		;AND LOAD THE BUFFER WITH 1
+	JR	OKFINE		;GO TO OK FINE ENTRY POINT
+
+SWTHREE	EQU	$		;If three was requested, enter here
+	LD	HL,SWITCH	;LOAD HL WITH ADDRESS OF SWITCH
+	LD	A,3		;LOAD ACCUMULATOR WITH 3
+	LD	(HL),A		;AND LOAD IT WITH 3
+	JR	OKFINE		;GO TO OK FINE ENTRY POINT
+
+INCRIM:	INC	IX		;INCRIMENT THE TEST ADDRESS
+	DJNZ	CHKLOP		;CONTINUE TO LOOP UNTIL ALL MEMORY CHECKED
+
+OKFINE:	CALL	FILL		;Fill memory with 1a's. End of file markers
+	LD	DE,FCB+1	;Point to the file control block file name
+	LD	A,(DE)		;Load accumulator with the file names byte
+	CP	SPACE		;Check to see if it is a space
+	JR	NZ,POINT1	;If not a space, go to point 1
+	LD	DE,ERROR4	;Load de with the address of error message 4
+	CALL	DUMP		;And display the message on the screen
+	JP	WARM		;Do a warm boot.
+
+POINT1:	LD	DE,FCB + 9	;Point to the file type
+	LD	A,'F'		;Load accumulator with f for FLK
+	LD	(DE),A		;load it into the FCB
+	INC	DE		;Incriment the destination
+	LD	A,'L'		;Load accumulator with l for FLK
+	LD	(DE),A		;And load it into the FCB
+	INC	DE		;Incriment the destination
+	LD	A,'K'		;Load accumulator with k for FLK
+	LD	(DE),A		;And load it into the FCB
+
+	CALL	INITIALIZE	;Initialize the modem communications params.
+	LD	DE,MSG01	;Load de with the menu
+	CALL	DUMP		;And display the message on the screen
+	
+	LD	HL,SWITCH	;POINT TO THE SWITCH BUFFER
+	LD	A,(HL)		;AND LOAD ACCUMULATOR WITH IT
+	CP	1		;CHECK TO SEE IF IT IS 1
+	JP	Z,KTOF		;IF IT IS, GO TO KAYPRO TO FLUKE
+	CP	2		;CHECK TO SEE IF IT IS 2
+	JP	Z,FTOK		;IF IT IS, GO TO FLUKE TO KAYPRO
+	CP	3		;CHECK TO SEE IF IT IS 3
+	JR	Z,WAIT		;If so, wait for a character from port
+
+LOOP1:	LD	E,0FFH		;Load e with 1111 1111 for unadorned input
+	LD	C,UNADIO	;Load c with unadorned console i/o
+	CALL	BDOS		;And scan the keyboard for an input
+	CP	0		;Check to see if there was a byte
+	JR	Z,LOOP1		;If not, then continue to loop until it is
+	CP	'1'		;Compare the input with 1
+	JP	Z,KTOF		;If true, go to Kaypro to Fluke
+	CP	'2'		;Compare the input with 2
+	JP	Z,FTOK		;If true, go to Fluke to Kaypro
+	CP	'3'		;Compare the input with 3
+	JP	Z,WARM		;If true, do a warm boot
+	JR	LOOP1		;Bad input request, continue to loop until
+
+WAIT:	LD	DE,MSG09	;POINT TO MESSAGE BUFFER NINE
+	LD	C,PRINT		;LOAD C WITH BDOS PRINT REQUEST
+	CALL	BDOS		;AND DISPLAY THE MESSAGE
+
+WAITLP	EQU	$		;HERE WE WAIT
+	IN	A,(STATUS)	;Get the status of the buffer
+	BIT	0,A		;Test the first bit for a 1.
+	JR	Z,WAITLP	;If no byte, then continue to receive
+
+;-----------------------------------------------------------------------------
+;      |								      |
+;      |      Allow to fall through to transfer from kaypro 10 to fluke 9010a |
+;     \./								      |
+;-----------------------------------------------------------------------------
+
+KTOF	EQU	$		;Transfer data from Kaypro to Fluke
+	LD	DE,MSG04	;Load de with the message
+	CALL	DUMP		;And clear the screen
+
+	LD	DE,FCB		;Point to the file to be transmitted
+	LD	C,OPEN		;Load c with bdos open request
+	CALL	BDOS		;And attempt to open the file.
+	CP	0FFH		;Check to see if the file was opened
+	JR	NZ,POINT2	;If yes, it was, then go to point 2
+	LD	DE,ERROR1	;Load de with unable to locate file message
+	CALL	DUMP		;And display the message on the screen
+	JP	WARM		;Do a warm boot
+
+POINT2:	LD	DE,EPROG	;Point to the end of the program for storrage
+
+LOOP3:	PUSH	DE		;Store the data buffer pointer
+	CALL	FILL2		;Fill the data i/o buffer with end of files
+	LD	DE,FCB		;Point to the file control block once more
+	LD	C,READS		;Load c with read sequential function
+	CALL	BDOS		;And attempt to read a sector
+	CALL	FORMAT		;Have computer check the format of the file
+	CP	00H		;It a good read?
+	JR	NZ,POINT3	;If it is not, then go to point 3
+
+	POP	DE		;Restore the destination address pointer
+	LD	HL,DIOBUFF	;Point to the data i/o buffer for transfer
+	LD	B,128		;Load byte count with 128 byte to move
+
+LOOP4:	LD	A,(HL)		;Load accumulator with byte to move
+	LD	(DE),A		;and move it into destination address
+	INC	HL		;Incriment the data i/o buffer
+	INC	DE		;Incriment the destination address pointer
+	DJNZ	LOOP4		;Continue to move until all bytes are moved
+	JR	LOOP3		;Go read another sector
+
+POINT3	EQU	$		;Data has been read into memory.
+	POP	DE		;Do some housecleaning.
+	CALL	TOTAL		;Total up the number of programs in workspace
+	CALL	DOSIZE		;Total up number of bytes
+
+	CALL	SHUTIT		;And close the file.
+
+	LD	DE,EPROG	;Point to the start of the file to dump
+	CALL	TRANSMIT	;Transmit the file
+
+DONE:	LD	DE,MSG02	;Point to the end message
+	CALL	DUMP		;And display the message on the screen
+	JP	WARM		;Terminate normal execution with a warm boot
+
+FTOK	EQU	$		;Transfer from Fluke to Kaypro
+	LD	DE,MSG03	;Load e with a message
+	CALL	DUMP		;And clear the screen
+	LD	DE,FCB		;Point to the file that was requested
+	LD	C,OPEN		;And see if it is on the disk already
+	CALL	BDOS		;Place result into a
+	CP	0FFH		;Check to see if opened.
+	JR	Z,POINT4	;If not found, then good. Go to point 4
+	LD	DE,ERROR3	;Point to the file already exists
+	CALL	DUMP		;And display the message on the screen
+	JP	WARM		;Do a warm boot
+
+POINT4:	LD	DE,FCB		;Point to the file control block again
+	LD	C,CREATE	;Load c with bdos request to create a file
+	CALL	BDOS		;and attempt to create the file on disk.
+	CP	0FFH		;Was the result not createable
+	JR	NZ,POINT5	;If yes, created, then go to point 5
+	LD	DE,ERROR2	;Load de with unable to create message
+	CALL	DUMP		;And display the error message on the screen
+	JP	WARM		;Terminate with a warm boot
+
+POINT5:	LD	DE,EPROG	;Point to the end of the file for data buffer
+	CALL	RECEIVE		;And receive the data into memory
+	PUSH	DE		;Store the address of the end of file
+	POP	HL		;And restore it into hl registers
+	LD	(EFILE),HL	;Store the end of file pointer in a buffer
+
+	LD	DE,EPROG	;Point to the end of the program again
+
+LOOP5:	LD	HL,DIOBUFF	;Point to the data i/o buffer
+	LD	BC,128		;Load byte count with 128 bytes to move
+
+LOOP6:	LD	A,(DE)		;Load accumulator with the byte to  move
+	LD	(HL),A		;And load destination with the byte
+	CALL	TRYTHIS		;Call the check for end of data
+	INC	HL		;Incriment destination
+	INC	DE		;Incriment source
+	DEC	BC		;Decriment the byte count
+	LD	A,B		;Load a with b to check for end
+	OR	C		;Or in the last 8 bits
+	JR	NZ,LOOP6	;If not done with move, loop 6 until
+	CALL	UPIT		;Update the disk.
+	JR	LOOP5		;Continue to loop untill upit stops or end
+
+TRYTHIS	EQU	$		;Check efile and de for =. If is, then end
+	PUSH	AF		;Store af
+	PUSH	DE		;Store de
+	PUSH	HL		;And store hl.
+	PUSH	BC		;Dont forget byte count
+	LD	HL,(EFILE)	;Load hl with the end of file address
+	SBC	HL,DE		;Subtract the two
+	LD	A,H		;Load accumulator with h
+	OR	L		;Or in the last 8 bits
+	CP	0		;Check to see if result was zero
+	JR	Z,STORE		;is yes, then go to store data
+	POP	BC		;Restore the byte count
+	POP	HL		;Restore the high low
+	POP	DE		;Restore the destination
+	POP	AF		;Restore the accumulator flag
+	RET			;And return to sender
+
+STORE:	CALL	UPIT		;Update the disk with the data.
+	CALL	SHUTIT		;And close the file.
+	JP	DONE		;Go to the done routine
+
+UPIT:	PUSH	DE		;Store the destination address
+	LD	DE,FCB		;Point to the file control block again
+	LD	C,WRITES	;Load c with write sequential request
+	CALL	BDOS		;And write the sector out
+	CP	0FFH		;See if a fault was located.
+	JR	NZ,POINT6	;If there was not, then go to point 6
+	LD	DE,ERROR5	;Load de with the unable to write error
+	CALL	DUMP		;And display the error message
+	CALL	SHUTIT		;And attempt to close the file
+	JP	WARM		;Terminate with a warm boot
+
+POINT6:	POP	DE		;Restore the destination address
+	RET			;And return to sender
+	
+TOTAL	EQU	$		;Find the number of programs and display it
+	LD	DE,EPROG	;Point to the start of the programs data
+
+LOOP9:	LD	A,(DE)		;load the accumulator with a byte
+	CP	01AH		;is it an end of file marker?
+	JR	Z,ETOTAL	;If it is, then display the total count
+	CP	03AH		;is the byte a :?
+	JR	Z,HOWME		;If yes, then go to how me routine
+	INC	DE		;If not, then add one to the address
+	JR	LOOP9		;Continue with loop untill end of file
+
+HOWME:	INC	DE		;Point past the :
+	LD	A,(DE)		;Load a with the next byte
+	CP	'1'		;Is is a 1?
+	JR	NZ,LOOP9	;If not, continue to loop
+	INC	DE		;Incriment past the 1
+	LD	A,(DE)		;Load a with the next byte
+	CP	'A'		;Is it a A?
+	JR	NZ,LOOP9	;If not, continue to loop
+	LD	HL,PROGS	;Point to the program counter buffer
+	LD	A,(HL)		;Load accumulator with it
+	ADD	A,1		;Add one to it
+	LD	(HL),A		;And place the result back into buffer
+	JR	LOOP9		;Continue with loop untill all bytes checked
+
+ETOTAL	EQU	$		;Display the number of programs in workspace
+	LD	DE,MSG06	;Point to the message buffer
+	CALL	DUMP		;And display the message on the screen.
+	LD	HL,PROGS	;Point to the result buffer
+	LD	A,(HL)		;And load accumulator with it
+	CALL	CNVRT		;Call the conversion routine
+	LD	DE,RESULT	;Point to the result buffer
+	CALL	DUMP		;And display the count on the screen
+	LD	DE,CRLF		;Point to the crlf
+	CALL	DUMP		;And print a crlf
+	RET			;Return to sender
+
+DOSIZE	EQU	$		;Find end of file and give number of bytes
+	LD	HL,EPROG	;Point to the end of the program
+
+LOOP10:	LD	A,(HL)		;Load accumulator with the byte
+	CP	01AH		;Is it the end of file marker?
+	JR	Z,ELOOP10	;If yes, end loop 10
+	INC	HL		;Incriment the address
+	JR	LOOP10		;And continue to loop until it is found
+
+ELOOP10	EQU	$		;End of file marker found.
+	LD	DE,EPROG	;Point to the end of program
+	SBC	HL,DE		;And subtract the two
+	PUSH	HL		;Store the result into stack
+	LD	DE,MSG07	;Point to message buffer 7
+	CALL	DUMP		;And display the message
+	POP	HL		;Restore the result
+	CALL	PHL		;And call the print hl register routine
+
+	LD	DE,CRLF		;Point to it again
+	CALL	DUMP		;And print another crlf
+	LD	DE,CRLF		;Point to the crlf
+	CALL	DUMP		;And display it
+	RET			;Return to sender
+
+UNCOMP:	LD	DE,ERROR6	;Point to error message 6
+	CALL	DUMP		;And display the message
+	JP	WARM		;Do warm boot to terminate
+
+;************************************************************************
+;* CHECK THE DATA THAT WAS JUST READ IN FOR VALID DATA.			*
+;* ALLOW 0-9, A-F, *, :, $, AND 1A'S					*
+;*									*
+;************************************************************************
+
+FORMAT:	PUSH	AF		;Push af
+	PUSH	BC		;Store bc
+	PUSH	DE		;and store de
+	PUSH	HL		;Store hl
+	PUSH	IX		;Store ix
+	LD	HL,DIOBUFF	;Point to the data i/o buffer
+	LD	BC,128		;Load byte count with number to check
+
+FLOOP1:	LD	A,(HL)		;Load accumulator with the byte to check
+	CALL	NEWLINE		;Call the new line routine to check for newline
+	LD	DE,22		;Load de with the number of bytes to check
+	LD	IX,INDEX2	;Point to the index string with ix
+	PUSH	BC		;Store the byte count
+
+FLOOP2:	LD	B,(IX + 0)	;Load b with the index byte
+	CP	B		;Subtract b from a, result is not put into a
+	JR	Z,BYTEOK	;If the byte is valid, goto byte ok
+	INC	IX		;Incriment the valid bytes index
+	DEC	DE		;Decriment the index byte count
+	PUSH	AF		;And store the byte being tested
+	LD	A,D		;Load a with d
+	OR	E		;or in the last 8 bits
+	CP	0		;Compare with 0 for end of index
+	JR	Z,BYTEBAD	;IF end, then byte is bad.
+	POP	AF		;Restore the byte being tested
+	JR	FLOOP2		;Continue to test byte with the index
+
+BYTEBAD	EQU	$		;The byte being tested was bad
+	LD	DE,ERROR6	;Point to error message 6
+	CALL	DUMP		;And display the message
+	LD	HL,(LCOUNT)	;Load hl with the linecounter buffer
+	CALL	PHL		;And print the amount in it
+	LD	DE,MSG08	;Load de with the *** message buffer
+	CALL	DUMP		;And display tye message
+	JP	WARM		;Do warm boot
+
+BYTEOK:	POP	BC		;Restore the byte count
+	INC	HL		;Incriment the byte pointer
+	DEC	BC		;Decriment the byte counter
+	LD	A,B		;Load a with b for a check of zero
+	OR	C		;Or in the last 8 bits
+	JR	NZ,FLOOP1	;If result is not zero, go to format loop 1
+
+	POP	IX		;Restore index
+	POP	HL		;Restore hl
+	POP	DE		;Restore de
+	POP	BC		;Restore byte count
+	POP	AF		;Restore af
+	RET			;Return to sender
+
+NEWLINE	EQU	$		;Check the byte for a :
+	PUSH	AF		;after stor of all registers.
+	PUSH	BC		;In alphabetical order
+	PUSH	DE		;Store de
+	PUSH	HL		;Store hl
+	PUSH	IX		;Store ix
+	CP	0DH		;Is the byte a carriage return?
+	JR	NZ,NONEW	;If not, then go to no new line
+	LD	HL,(LCOUNT)	;Load hl with the line count
+	INC	HL		;Incriment the line count
+	LD	(LCOUNT),HL	;and place the result back into l count buffer
+
+NONEW:	POP	IX		;Restore ix
+	POP	HL		;Restore hl
+	POP	DE		;Restore de
+	POP	BC		;Restore bc
+	POP	AF		;Restore af
+	RET			;Return to sender
+
+DUMP:	LD	C,PRINT		;Load c with print request
+	CALL	BDOS		;And display it on the screen
+	RET			;Return to caller
+
+shutit:	LD	DE,FCB		;Point to the fcb again
+	LD	C,CLOSE		;Load c with the close
+	CALL	BDOS		;And attempt to close the file
+	ret			;return to sender
+
+	NOP			;Buffer the program
+	NOP			;With a nop or two
+EPROG	EQU	$		;Place end of file address into end of file
+	END			;End assembly
+

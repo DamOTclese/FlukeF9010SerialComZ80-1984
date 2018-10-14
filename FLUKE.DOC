@@ -1,0 +1,25 @@
+FLUKE.LBR, written by Fredric L. Rice sometime in January 1984.
+
+   Included within this  library is a file called FLUKE.COM and
+FLUKE.MAC. I have offered the source code to  allow the user to
+change values for modem operations required by his computer.
+
+   The Fluke program is used only for the transfer and storrage
+of Fluke 9010a microcode from computer to tester or from tester
+to computer. This  allows the test teck.  to store his programs
+on a disk rather than have to use  the tape cassett which is on
+the F9010 but  proves to be  too slow for  in-house  testing of
+computer equipment.
+
+   I have found  that there are  a lot of people out  there who
+use Fluke equipment, and a few that use the 9010a testing/fault
+isolator. For  you people, this  program will mean that no more
+tapes will be required and that old  revisions of test programs
+can be stored and housed for  safe keeping.  Higher quantity of
+programs on floppy is also a nice feature.
+
+   BUT THE BEST PART:  After writing your test programs on your
+computer with Word Star (tm), you can transfer the program, and
+not have to use the Flukes keyboard.
+
+
